@@ -34,7 +34,10 @@ _PIVOT_PATTERN = re.compile(r'\bPIVOT\s*\(', re.IGNORECASE)
 _LENGTH_PATTERN = re.compile(r'\bLENGTH\s*\(', re.IGNORECASE)
 _INSTR_PATTERN = re.compile(r'\bINSTR\s*\(([^,]+),\s*([^)]+)\)', re.IGNORECASE)
 _CEIL_PATTERN = re.compile(r'\bCEIL\s*\(', re.IGNORECASE)
-_INITCAP_PATTERN = re.compile(r'\bINITCAP\s*\(', re.IGNORECASE)
+_INITCAP_PATTERN = re.compile(r'\bINITCAP\s*\(([^)]+)\)', re.IGNORECASE)
+_TRIM_PATTERN = re.compile(r'\bTRIM\s*\(([^()]+(?:\([^()]*\))*)\)', re.IGNORECASE)
+_KEEP_DENSE_RANK_PATTERN = re.compile(r'\bKEEP\s*\(\s*DENSE_RANK\s+(FIRST|LAST)', re.IGNORECASE)
+_TUPLE_IN_PATTERN = re.compile(r'\([^)]+,\s*[^)]+\)\s+IN\s*\(', re.IGNORECASE)
 
 
 class ConversionWarning:
@@ -97,6 +100,7 @@ class OracleToAzureConverter:
         converted = self._convert_length(converted)
         converted = self._convert_instr(converted)
         converted = self._convert_ceil(converted)
+        converted = self._convert_trim(converted)
         converted = self._convert_initcap(converted)
         converted = self._convert_listagg(converted)
         converted = self._convert_regexp_like(converted)
@@ -301,6 +305,24 @@ class OracleToAzureConverter:
                 ConversionWarning(
                     "Oracle PIVOT syntax detected. SQL Server PIVOT uses different syntax. Consider conditional aggregation instead.",
                     warning_type='PIVOT'
+                )
+            )
+        
+        # Check for KEEP/DENSE_RANK (Oracle analytic)
+        if _KEEP_DENSE_RANK_PATTERN.search(query):
+            self.warnings.append(
+                ConversionWarning(
+                    "Oracle KEEP (DENSE_RANK FIRST/LAST) detected. SQL Server requires ROW_NUMBER() with partitioning instead. Manual rewrite needed.",
+                    warning_type='KEEP_DENSE_RANK'
+                )
+            )
+        
+        # Check for tuple IN comparisons
+        if _TUPLE_IN_PATTERN.search(query):
+            self.warnings.append(
+                ConversionWarning(
+                    "Tuple comparison in IN clause detected: (col1, col2) IN (...). SQL Server doesn't support this. Rewrite as: EXISTS (SELECT 1 FROM ... WHERE col1=... AND col2=...)",
+                    warning_type='TUPLE_IN'
                 )
             )
         
@@ -755,26 +777,45 @@ class OracleToAzureConverter:
     
     def _convert_initcap(self, query: str) -> str:
         """
-        Convert Oracle INITCAP() - SQL Server has no direct equivalent.
+        Convert Oracle INITCAP() to a TitleCase approximation.
         Oracle: INITCAP(string) - capitalizes first letter of each word
-        SQL Server: No native function
+        SQL Server: No native function - use UPPER(LEFT(col,1)) + LOWER(SUBSTRING(col,2,LEN(col)))
         
-        Provide a warning and a simple approximation for single-word cases.
+        Note: This approximation only handles single words. Multi-word strings need custom UDF.
         """
         if _INITCAP_PATTERN.search(query):
             self.warnings.append(ConversionWarning(
-                'INITCAP detected. SQL Server has no native INITCAP function. '
-                'For single words: UPPER(LEFT(str,1)) + LOWER(SUBSTRING(str,2,LEN(str))). '
-                'For multi-word strings, consider a custom function or CLR.',
+                'INITCAP converted to single-word approximation: UPPER(LEFT(col,1)) + LOWER(SUBSTRING(col,2,LEN(col))). '
+                'For multi-word strings ("john doe" → "John Doe"), create a custom scalar UDF or use CLR function.',
                 warning_type='INITCAP'
             ))
             
-            # Simple single-word approximation (won't handle multiple words correctly)
             def replace_initcap(match):
-                # Extract the argument - this is a simplified approach
-                return "/* INITCAP - MANUAL FIX REQUIRED */ INITCAP("
+                arg = match.group(1).strip()
+                # Generate single-word TitleCase approximation
+                return f"UPPER(LEFT({arg},1)) + LOWER(SUBSTRING({arg},2,LEN({arg})))"
             
             return _INITCAP_PATTERN.sub(replace_initcap, query)
+        
+        return query
+    
+    def _convert_trim(self, query: str) -> str:
+        """
+        Convert Oracle TRIM() to SQL Server LTRIM(RTRIM()) for maximum compatibility.
+        Oracle: TRIM(string)
+        SQL Server: TRIM() works in 2017+, but LTRIM(RTRIM()) works in all versions
+        """
+        if _TRIM_PATTERN.search(query):
+            self.warnings.append(ConversionWarning(
+                'TRIM() converted to LTRIM(RTRIM(...)) for broad compatibility (SQL Server 2016 and earlier).',
+                warning_type='TRIM'
+            ))
+            
+            def replace_trim(match):
+                arg = match.group(1).strip()
+                return f"LTRIM(RTRIM({arg}))"
+            
+            return _TRIM_PATTERN.sub(replace_trim, query)
         
         return query
     
