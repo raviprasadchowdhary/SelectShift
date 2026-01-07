@@ -76,6 +76,25 @@ pip install pytest
 
 **No additional dependencies needed for the GUI** - tkinter is included with Python!
 
+### 📦 Deployment Options
+
+**Option 1: Run with Python** (Current - requires Python 3.7+)
+```powershell
+python run_gui.py
+```
+
+**Option 2: Standalone Executable** (No Python required!)
+```powershell
+# Build once:
+pip install pyinstaller
+pyinstaller oracle_azure_converter.spec
+
+# Distribute:
+dist/OracleAzureConverter.exe  ← Share this with QA testers!
+```
+
+See **[BUILD_EXECUTABLE.md](BUILD_EXECUTABLE.md)** for detailed instructions on creating a standalone .exe that doesn't require Python installation.
+
 ## 📖 Usage
 
 ### 🖥️ GUI Application (Recommended for QA Testers)

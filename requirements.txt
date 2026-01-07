@@ -1,1 +1,6 @@
+# Testing dependencies
 pytest>=7.0.0
+
+# Optional: For building standalone executable
+# Uncomment the line below if you want to create .exe file
+# pyinstaller>=5.0.0
