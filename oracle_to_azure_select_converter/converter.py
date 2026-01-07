@@ -32,7 +32,11 @@ _MONTHS_BETWEEN_PATTERN = re.compile(r'\bMONTHS_BETWEEN\s*\(([^,]+),\s*([^)]+)\)
 _REGEXP_SUBSTR_PATTERN = re.compile(r'\bREGEXP_SUBSTR\s*\(', re.IGNORECASE)
 _PIVOT_PATTERN = re.compile(r'\bPIVOT\s*\(', re.IGNORECASE)
 _LENGTH_PATTERN = re.compile(r'\bLENGTH\s*\(', re.IGNORECASE)
-_INSTR_PATTERN = re.compile(r'\bINSTR\s*\(([^,]+),\s*([^)]+)\)', re.IGNORECASE)
+# Match INSTR with proper nesting support: INSTR(string, substring [, start_position])
+_INSTR_PATTERN = re.compile(
+    r'\bINSTR\s*\(([^,()]+(?:\([^()]*\))?[^,]*),\s*([^,()]+(?:\([^()]*\))?[^,]*)(?:,\s*([^)]+))?\)',
+    re.IGNORECASE
+)
 _CEIL_PATTERN = re.compile(r'\bCEIL\s*\(', re.IGNORECASE)
 _INITCAP_PATTERN = re.compile(r'\bINITCAP\s*\(([^)]+)\)', re.IGNORECASE)
 _TRIM_PATTERN = re.compile(r'\bTRIM\s*\(([^()]+(?:\([^()]*\))*)\)', re.IGNORECASE)
@@ -752,18 +756,84 @@ class OracleToAzureConverter:
     def _convert_instr(self, query: str) -> str:
         """
         Convert Oracle INSTR to SQL Server CHARINDEX.
-        Oracle: INSTR(string, substring) - returns position of substring in string
-        SQL Server: CHARINDEX(substring, string) - parameters are reversed!
+        Oracle: INSTR(string, substring [, start_position]) 
+        SQL Server: CHARINDEX(substring, string [, start_location])
         
-        Note: INSTR returns 0 if not found; CHARINDEX also returns 0 if not found.
+        Note: Parameters are REVERSED for the first two arguments!
+        Uses innermost-first replacement to handle nested calls.
         """
-        def replace_instr(match):
-            string_expr = match.group(1).strip()
-            substring_expr = match.group(2).strip()
-            # Reverse the parameter order for CHARINDEX
-            return f"CHARINDEX({substring_expr}, {string_expr})"
+        # Simple pattern for INSTR - we'll parse arguments manually
+        instr_pattern = re.compile(r'\bINSTR\s*\(', re.IGNORECASE)
         
-        return _INSTR_PATTERN.sub(replace_instr, query)
+        max_iterations = 20
+        iterations = 0
+        
+        while instr_pattern.search(query) and iterations < max_iterations:
+            iterations += 1
+            match = instr_pattern.search(query)
+            if not match:
+                break
+                
+            start_pos = match.end() - 1  # Position of opening paren
+            
+            # Find matching closing paren
+            paren_count = 0
+            args_start = match.end()
+            i = start_pos
+            
+            while i < len(query):
+                if query[i] == '(':
+                    paren_count += 1
+                elif query[i] == ')':
+                    paren_count -= 1
+                    if paren_count == 0:
+                        # Found the matching closing paren
+                        args_str = query[args_start:i]
+                        
+                        # Parse arguments (split by comma not inside parentheses)
+                        args = self._split_args(args_str)
+                        
+                        if len(args) == 2:
+                            # INSTR(str, substr) → CHARINDEX(substr, str)
+                            replacement = f"CHARINDEX({args[1].strip()}, {args[0].strip()})"
+                        elif len(args) == 3:
+                            # INSTR(str, substr, start) → CHARINDEX(substr, str, start)
+                            replacement = f"CHARINDEX({args[1].strip()}, {args[0].strip()}, {args[2].strip()})"
+                        else:
+                            # Keep as-is if unexpected argument count
+                            i += 1
+                            continue
+                        
+                        # Replace this INSTR call
+                        query = query[:match.start()] + replacement + query[i+1:]
+                        break
+                i += 1
+        
+        return query
+    
+    def _split_args(self, args_str: str) -> list:
+        """Split comma-separated arguments, respecting nested parentheses."""
+        args = []
+        current_arg = []
+        paren_depth = 0
+        
+        for char in args_str:
+            if char == '(' :
+                paren_depth += 1
+                current_arg.append(char)
+            elif char == ')':
+                paren_depth -= 1
+                current_arg.append(char)
+            elif char == ',' and paren_depth == 0:
+                args.append(''.join(current_arg))
+                current_arg = []
+            else:
+                current_arg.append(char)
+        
+        if current_arg:
+            args.append(''.join(current_arg))
+        
+        return args
     
     def _convert_ceil(self, query: str) -> str:
         """
