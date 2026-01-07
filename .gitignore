@@ -31,6 +31,8 @@ env/
 .coverage
 htmlcov/
 .tox/
+test_*.py
+*_test.py
 
 # IDE
 .vscode/
@@ -47,3 +49,14 @@ Thumbs.db
 *.log
 output*.sql
 converted*.sql
+
+# PyInstaller
+*.spec
+*.manifest
+
+# Documentation (keep only essential docs)
+*_SUMMARY.md
+*_UPDATE.md
+*_ENHANCEMENT.md
+*_SUCCESS.md
+DEPLOYMENT_OPTIONS.md

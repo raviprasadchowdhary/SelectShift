@@ -1,10 +1,18 @@
-"""
-Azure SQL to Oracle SELECT Query Converter (Reverse Direction)
+"""Azure SQL to Oracle SELECT Query Converter (Reverse Direction)
 """
 
 import re
 from typing import List, Tuple
 from .converter import ConversionWarning
+
+# Pre-compile regex patterns for better performance
+_TOP_PATTERN = re.compile(r'\bSELECT\s+TOP\s+(\d+)\s+', re.IGNORECASE)
+_WHERE_PATTERN = re.compile(r'\bWHERE\b', re.IGNORECASE)
+_ORDER_BY_PATTERN_REVERSE = re.compile(r'\bORDER\s+BY\b', re.IGNORECASE)
+_GETDATE_PATTERN = re.compile(r'\bGETDATE\s*\(\s*\)', re.IGNORECASE)
+_ISNULL_PATTERN = re.compile(r'\bISNULL\s*\(((?:[^()]|\([^()]*\))*)\)', re.IGNORECASE)
+_CAST_DATE_PATTERN = re.compile(r'\bCAST\s*\(([^)]+)\s+AS\s+DATE\s*\)', re.IGNORECASE)
+_CASE_WHEN_PATTERN = re.compile(r'\bCASE\s+WHEN\b', re.IGNORECASE)
 
 
 class AzureToOracleConverter:
@@ -24,6 +32,13 @@ class AzureToOracleConverter:
             Tuple of (converted_query, list_of_warnings)
         """
         self.warnings = []
+        
+        # Input validation
+        if not azure_query or not isinstance(azure_query, str):
+            self.warnings.append(
+                ConversionWarning("Invalid input: Query must be a non-empty string.")
+            )
+            return azure_query if azure_query else "", self.warnings
         
         # Validate it's a SELECT query
         if not self._is_select_query(azure_query):
@@ -53,72 +68,44 @@ class AzureToOracleConverter:
         Convert SELECT TOP N to WHERE ROWNUM <= N.
         Note: This is a basic conversion. Complex TOP usage may need manual review.
         """
-        # Pattern: SELECT TOP number
-        pattern = r'\bSELECT\s+TOP\s+(\d+)\s+'
-        match = re.search(pattern, query, flags=re.IGNORECASE)
+        match = _TOP_PATTERN.search(query)
         
-        if match:
-            limit = match.group(1)
-            
-            # Remove TOP N from SELECT
-            converted = re.sub(pattern, 'SELECT ', query, flags=re.IGNORECASE)
-            
-            # Add WHERE ROWNUM <= N (or extend existing WHERE)
-            if re.search(r'\bWHERE\b', converted, flags=re.IGNORECASE):
-                # Add to existing WHERE clause
-                converted = re.sub(
-                    r'\bWHERE\b',
-                    f'WHERE ROWNUM <= {limit} AND',
-                    converted,
-                    count=1,
-                    flags=re.IGNORECASE
-                )
-            else:
-                # Add new WHERE clause before ORDER BY if present
-                if re.search(r'\bORDER\s+BY\b', converted, flags=re.IGNORECASE):
-                    converted = re.sub(
-                        r'\bORDER\s+BY\b',
-                        f'WHERE ROWNUM <= {limit} ORDER BY',
-                        converted,
-                        count=1,
-                        flags=re.IGNORECASE
-                    )
-                else:
-                    # Add at the end
-                    converted = converted.rstrip() + f'\nWHERE ROWNUM <= {limit}'
-            
-            # Warn about ORDER BY
-            if re.search(r'\bORDER\s+BY\b', converted, flags=re.IGNORECASE):
-                self.warnings.append(
-                    ConversionWarning("TOP converted to ROWNUM with ORDER BY. Results may differ - consider using a subquery.")
-                )
+        if not match:
+            return query
         
-        return query if not match else converted
+        limit = match.group(1)
+        converted = _TOP_PATTERN.sub('SELECT ', query)
+        
+        # Add WHERE ROWNUM <= N (or extend existing WHERE)
+        if _WHERE_PATTERN.search(converted):
+            converted = _WHERE_PATTERN.sub(f'WHERE ROWNUM <= {limit} AND', converted, count=1)
+        elif _ORDER_BY_PATTERN_REVERSE.search(converted):
+            converted = _ORDER_BY_PATTERN_REVERSE.sub(f'WHERE ROWNUM <= {limit} ORDER BY', converted, count=1)
+        else:
+            converted = converted.rstrip() + f'\nWHERE ROWNUM <= {limit}'
+        
+        # Warn about ORDER BY
+        if _ORDER_BY_PATTERN_REVERSE.search(converted):
+            self.warnings.append(
+                ConversionWarning("TOP converted to ROWNUM with ORDER BY. Results may differ - consider using a subquery.")
+            )
+        
+        return converted
     
     def _convert_getdate(self, query: str) -> str:
         """Convert GETDATE() to SYSDATE."""
-        converted = re.sub(r'\bGETDATE\s*\(\s*\)', 'SYSDATE', query, flags=re.IGNORECASE)
-        return converted
+        return _GETDATE_PATTERN.sub('SYSDATE', query)
     
     def _convert_isnull(self, query: str) -> str:
         """Convert ISNULL(a, b) to NVL(a, b)."""
-        def replace_isnull(match):
-            content = match.group(1)
-            return f"NVL({content})"
-        
-        pattern = r'\bISNULL\s*\(((?:[^()]|\([^()]*\))*)\)'
-        converted = re.sub(pattern, replace_isnull, query, flags=re.IGNORECASE)
-        return converted
+        return _ISNULL_PATTERN.sub(lambda m: f"NVL({m.group(1)})", query)
     
     def _convert_string_concatenation(self, query: str) -> str:
         """
         Convert + to || for string concatenation.
         Note: This is a heuristic and may not be perfect for numeric addition.
         """
-        # This is tricky because + is also used for numeric addition
-        # We'll do a simple replacement and add a warning
         if '+' in query and "'" in query:
-            # Likely has string concatenation
             converted = query.replace(' + ', ' || ')
             self.warnings.append(
                 ConversionWarning("String concatenation operator (+) converted to (||). Verify numeric additions are not affected.")
@@ -128,29 +115,17 @@ class AzureToOracleConverter:
     
     def _convert_cast_date(self, query: str) -> str:
         """Convert CAST(date_col AS DATE) to TRUNC(date_col)."""
-        def replace_cast(match):
-            content = match.group(1).strip()
-            return f"TRUNC({content})"
-        
-        pattern = r'\bCAST\s*\(([^)]+)\s+AS\s+DATE\s*\)'
-        converted = re.sub(pattern, replace_cast, query, flags=re.IGNORECASE)
-        return converted
+        return _CAST_DATE_PATTERN.sub(lambda m: f"TRUNC({m.group(1).strip()})", query)
     
     def _convert_case_to_decode(self, query: str) -> str:
         """
         Convert simple CASE WHEN to DECODE.
         Only converts simple equality cases.
         """
-        # This is complex - we'll convert simple cases only
-        # Pattern: CASE WHEN expr = val THEN result ... ELSE default END
-        pattern = r'\bCASE\s+WHEN\s+(\w+)\s*=\s*([^T]+?)\s+THEN\s+([^W]+?)(?:\s+WHEN\s+\1\s*=\s*([^T]+?)\s+THEN\s+([^WE]+?))*(?:\s+ELSE\s+([^E]+?))?\s+END\b'
-        
-        # For now, we'll leave CASE as-is and add a note
-        if re.search(r'\bCASE\s+WHEN\b', query, flags=re.IGNORECASE):
+        if _CASE_WHEN_PATTERN.search(query):
             self.warnings.append(
                 ConversionWarning("CASE WHEN statement found. Consider converting to DECODE manually for better Oracle compatibility.")
             )
-        
         return query
 
 
