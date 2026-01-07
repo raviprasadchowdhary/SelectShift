@@ -1,20 +1,39 @@
-# Oracle to Azure SQL SELECT Query Converter
+# Oracle ↔ Azure SQL SELECT Query Converter
 
-A QA support tool for converting Oracle SELECT (read-only) SQL queries to Azure SQL / SQL Server-compatible format.
+A QA support tool for **bidirectional** conversion between Oracle and Azure SQL / SQL Server SELECT queries.
 
 ## 🎯 Purpose
 
 This tool is **NOT a migration engine**. It's a **QA accelerator** designed to help QA testers after database migration:
 
-- ✅ Quickly rewrite Oracle SELECT queries to run on Azure SQL
+- ✅ Quickly convert queries between Oracle and Azure SQL (bidirectional)
 - ✅ Compare query results between source and target databases  
 - ✅ Detect syntax and logic differences
+- ✅ **GUI interface** for easy conversion without coding
+
+## 🖥️ NEW: GUI Application
+
+**Launch the graphical interface:**
+```powershell
+python run_gui.py
+```
+
+**Features:**
+- Two-panel layout (Oracle ↔ Azure SQL)
+- Convert in either direction with one click
+- Visual warning display
+- Swap queries between panels
+- No coding required!
+
+See **[GUI_GUIDE.md](GUI_GUIDE.md)** for detailed GUI instructions.
 
 ## 📋 Features
 
 ### ✅ Supported Conversions
 
 The tool performs deterministic, safe conversions for:
+
+**Oracle → Azure SQL:**
 
 | Oracle Syntax | Azure SQL Equivalent | Description |
 |--------------|---------------------|-------------|
@@ -25,6 +44,16 @@ The tool performs deterministic, safe conversions for:
 | `\|\|` (concatenation) | `+` | String concatenation |
 | `TRUNC(date_col)` | `CAST(date_col AS DATE)` | Date truncation |
 | `WHERE ROWNUM <= N` | `SELECT TOP N` | Row limiting |
+
+**Azure SQL → Oracle:**
+
+| Azure SQL Syntax | Oracle Equivalent | Description |
+|-----------------|-------------------|-------------|
+| `ISNULL(a, b)` | `NVL(a, b)` | Null value replacement |
+| `GETDATE()` | `SYSDATE` | Current date/time |
+| `+` (concatenation) | `\|\|` | String concatenation |
+| `CAST(date AS DATE)` | `TRUNC(date)` | Date truncation |
+| `SELECT TOP N` | `WHERE ROWNUM <= N` | Row limiting |
 
 ### ⚠️ Warning Detection
 
@@ -45,14 +74,29 @@ cd c:\Users\916992\github\SelectShift
 pip install pytest
 ```
 
+**No additional dependencies needed for the GUI** - tkinter is included with Python!
+
 ## 📖 Usage
+
+### 🖥️ GUI Application (Recommended for QA Testers)
+
+```powershell
+python run_gui.py
+```
+
+**Benefits:**
+- Visual interface - no coding required
+- Two-panel layout for side-by-side comparison
+- Bidirectional conversion (Oracle ↔ Azure)
+- Instant warning display
+- Swap and clear functions
 
 ### Python API
 
+**Oracle → Azure:**
 ```python
 from oracle_to_azure_select_converter import convert_oracle_select_to_azure
 
-# Convert a query
 oracle_query = """
     SELECT 
         employee_id,
@@ -63,10 +107,25 @@ oracle_query = """
 """
 
 converted_query, warnings = convert_oracle_select_to_azure(oracle_query)
-
 print(converted_query)
 for warning in warnings:
     print(warning)
+```
+
+**Azure → Oracle:**
+```python
+from oracle_to_azure_select_converter import convert_azure_select_to_oracle
+
+azure_query = """
+    SELECT TOP 10
+        employee_id,
+        ISNULL(first_name, 'N/A') + ' ' + last_name AS full_name,
+        CASE WHEN status = 'A' THEN 'Active' END AS status_desc
+    FROM employees
+"""
+
+converted_query, warnings = convert_azure_select_to_oracle(azure_query)
+print(converted_query)
 ```
 
 **Output:**
